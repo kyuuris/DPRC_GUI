@@ -1,0 +1,23 @@
+# Add one entry per line in the format: month day hour (24-hour time)
+# Example:
+# 5 12 10   # Ignores May 12 at 10AM
+# 5 15 13   # Ignores May 15 at 1PM
+5 12 10
+5 12 11
+5 16 9
+5 16 10
+5 16 11
+5 23 9
+5 23 10
+5 23 11
+5 23 1
+5 23 2
+5 23 3
+5 26 9
+5 26 2
+5 27 10
+5 15 1
+5 26 1
+5 26 3
+5 26 10
+5 26 11

@@ -284,13 +284,12 @@ Student Services Building, 110 | San Francisco State University
     </html>
     """
 
-
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)
     mail.To = email
     mail.Subject = "DPRC @ SF State – Appointment Confirmation"
     mail.HTMLBody = final_email_html
-    mail.Display()
+    mail.send()
 
     messagebox.showinfo("Review Email", "Press OK after sending the email.")
 

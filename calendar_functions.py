@@ -96,21 +96,17 @@ def get_busy_times_by_person(usernames, start_time, end_time):
 
             for item in restricted_items:
                 try:
-                    # Skip if meeting was not accepted
-                    meeting_status = getattr(item, "MeetingStatus", None)  # 1 = Meeting
-                    response_status = getattr(item, "ResponseStatus", None)  # 0 = None, 3 = Declined
+                    start = item.Start.replace(tzinfo=None)
+                    end = item.End.replace(tzinfo=None)
 
-                    if meeting_status == 1 and response_status in [0, 3]:
-                        continue
+                    sensitivity = getattr(item, "Sensitivity", 0)  # 2 = Private
+                    is_private = sensitivity == 2
 
-                    if hasattr(item, "BusyStatus") and item.BusyStatus in [1, 2, 3]:
-                        start = item.Start.replace(tzinfo=None)
-                        end = item.End.replace(tzinfo=None)
-                        if start.year < 2100:
-                            busy_times.append((start, end))
+                    if start.year < 2100:
+                        busy_times.append((start, end))
+
                 except Exception as e:
-                    print(f"⚠️ Failed to parse item for {name}: {e}")
-                    continue
+                    print(f"⚠️ Skipped an item for {name}: {e}")
 
         except Exception as e:
             print(f"⚠️ Could not access {name}'s calendar: {e}")
@@ -121,6 +117,24 @@ def get_busy_times_by_person(usernames, start_time, end_time):
 def get_availability_text():
     def is_weekend(date):
         return date.weekday() >= 5
+    
+    def load_ignored_slots(file_path="ignored_slots.txt"):
+        ignored = set()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        try:
+                            m, d, h = map(int, line.split())
+                            if h in [1, 2, 3, 4]:
+                                h += 12
+                            ignored.add((m, d, h))
+                        except:
+                            continue
+        except FileNotFoundError:
+            pass
+        return ignored
 
     def get_flexible_free_blocks(busy_by_person, date, min_people_free=1):
         usernames = list(busy_by_person.keys())
@@ -128,15 +142,24 @@ def get_availability_text():
         all_slots = [start_of_day + timedelta(hours=i) for i in range(8)]
         free_slots = []
 
+        ignored_slots = load_ignored_slots()  # ⬅️ load from file
+
         for slot_start in all_slots:
+            m, d, h = slot_start.month, slot_start.day, slot_start.hour
+            if (m, d, h) in ignored_slots:
+                continue
+
             slot_end = slot_start + timedelta(hours=1)
-            free_count = 0
+            free_advisors = []
+
             for user in usernames:
                 overlaps = any(slot_start < end and slot_end > start for start, end in busy_by_person[user])
                 if not overlaps:
-                    free_count += 1
-            if free_count >= min_people_free:
-                free_slots.append(slot_start)
+                    free_advisors.append(user)
+
+            if len(free_advisors) >= min_people_free:
+                free_slots.append((slot_start, free_advisors))
+
         return free_slots
 
     def find_next_5_days(usernames, min_people_free=1):
@@ -149,6 +172,7 @@ def get_availability_text():
                 start = datetime.combine(current_day, datetime.min.time()).replace(hour=9)
                 end = datetime.combine(current_day, datetime.min.time()).replace(hour=17)
                 busy = get_busy_times_by_person(usernames, start, end)
+
                 free = get_flexible_free_blocks(busy, current_day, min_people_free)
                 if free:
                     results.append((current_day, free))
@@ -163,7 +187,9 @@ def get_availability_text():
 
     for date, slots in availability:
         date_str = date.strftime("%A, %B %d")
-        times = ", ".join(slot.strftime("%I:%M%p").lstrip("0") for slot in slots)
+        for slot_time, advisors in slots:
+            time_str = slot_time.strftime("%I:%M%p").lstrip("0")
+        times = ", ".join(slot_time.strftime("%I:%M%p").lstrip("0") for slot_time, _ in slots)
         lines.append(f"• {date_str} - {times}")
 
     return "\n".join(lines)
@@ -193,9 +219,9 @@ def get_latest_email_by_subject(subject_keyword):
     messages.Sort("[ReceivedTime]", True)
 
     for msg in messages:
-        if subject_keyword in msg.Subject and msg.Class == 43:  # 43 = MailItem
+        if subject_keyword in msg.Subject and msg.Class == 43:
             body = msg.Body
-            return body.strip(), msg  # You get both: the text and the message object
+            return body.strip(), msg
 
     return None, None
 
@@ -231,14 +257,14 @@ def get_advisors_free_at(requested_dt):
 
             for item in restricted_items:
                 try:
-                    # Skip if meeting was not accepted
-                    meeting_status = getattr(item, "MeetingStatus", None)  # 1 = Meeting
-                    response_status = getattr(item, "ResponseStatus", None)  # 0 = None, 3 = Declined
+                    # No skipping logic — if it has a time, we treat it as busy
+                    if hasattr(item, "Start") and hasattr(item, "End"):
+                        start = item.Start.replace(tzinfo=None)
+                        end = item.End.replace(tzinfo=None)
+                        if start.year < 2100:
+                            busy_times.append((start, end))
 
-                    if meeting_status == 1 and response_status in [0, 3]:
-                        continue
-
-                    if hasattr(item, "BusyStatus") and item.BusyStatus in [1, 2, 3]:
+                    if hasattr(item, "Start") and hasattr(item, "End"):
                         start = item.Start.replace(tzinfo=None)
                         end = item.End.replace(tzinfo=None)
                         if start.year < 2100:
@@ -254,52 +280,20 @@ def get_advisors_free_at(requested_dt):
     available_advisors = []
 
     for advisor, times in all_busy.items():
+        print(f"\n🕒 Checking availability for {advisor} on {requested_dt.strftime('%A, %B %d at %I:%M%p')}")
+        print("❌ Busy times:")
+        for start, end in times:
+            print(f"  - {start.strftime('%I:%M%p')} to {end.strftime('%I:%M%p')}")
+
         overlaps = any(start_time < end and end_time > start for start, end in times)
+
         if not overlaps:
+            print(f"✅ {advisor} is free from {start_time.strftime('%I:%M%p')} to {end_time.strftime('%I:%M%p')}")
             available_advisors.append(advisor)
+        else:
+            print(f"⛔ {advisor} is busy during that time window.")
 
     return available_advisors
 
 def get_day_suffix(day):
     return "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-
-def schedule_appt(date_str, time_str, advisor, student_info):
-    global driver
-
-    driver.find_element(By.NAME, "ctl00$ctl00$Navigation$StaffSearchControl$TxtBoxSearch").send_keys(student_info)
-    driver.find_element(By.NAME, "ctl00$ctl00$Navigation$StaffSearchControl$BtnSearch").click()
-    time.sleep(1)
-
-    driver.find_element(By.XPATH, "//li[a[contains(text(), 'Appointments')]]/a").click()
-    time.sleep(1)
-
-    driver.find_element(By.XPATH, "//a[contains(text(), 'Application Submitted')]").click()
-    time.sleep(1)
-
-    first = driver.find_element(By.NAME, "ctl00$ctl00$MainContent$CphMainContent$ApplicationStudentList$CtrlApplicationStudent$FormValidatorApps$TxtBoxFirstName$TxtBoxInput").get_attribute("value")
-    email = driver.find_element(By.NAME,"ctl00$ctl00$MainContent$CphMainContent$ApplicationStudentList$CtrlApplicationStudent$FormValidatorApps$TxtBoxEmail$TxtBoxInput").get_attribute("value")
-
-    EMAIL_TEMPLATE = """Hello [FIRST NAME],
-
-Your appointment has been scheduled on [DATE] at [TIME], with [ADVISOR]. Your appointment will be conducted virtually. You should have just received a calendar invite for your meeting including the zoom link to join.
-
-Kenneth L.
-Office Support Assistant
-Disability Programs & Resource Center
-San Francisco State University
-Student Services Building, Room 110
-Reception: (415) 338-2472 (voicemail checked daily)
-
-"""
-
-    final_email = EMAIL_TEMPLATE.replace("[FIRST NAME]", first).replace("[DATE]", date_str).replace("[TIME]", time_str).replace("[ADVISOR]", advisor)
-
-    # Send Outlook email
-    outlook = win32com.client.Dispatch("Outlook.Application")
-    mail = outlook.CreateItem(0)
-    mail.To = email
-    mail.Subject = "DPRC @ SF State – Initial Appointment Request"
-    mail.Body = final_email
-    mail.Display()
-
-    messagebox.showinfo("Review Email", "Press OK after reviewing and sending the email.")
