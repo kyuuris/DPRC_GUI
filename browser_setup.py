@@ -7,8 +7,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 
-password = "Asiandude@4480"  # Set your password here
-
 def launch_chrome(status_label=None, root=None):
     options = Options()
     options.add_argument(r"--user-data-dir=C:/Users/924199104/AppData/Local/Google/Chrome/User Data")
